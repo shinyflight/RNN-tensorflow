@@ -125,7 +125,7 @@ class LSTM_masking(object):
         total_batch = int(self.x_train.shape[0] // self.batch_size)
         print("Training started...")
         for epoch in range(self.epochs):
-            np.random.shuffle(x_train)
+            np.random.shuffle(self.x_train)
             for step in range(total_batch):
                 start_ind = step * self.batch_size
                 end_ind = (step + 1) * self.batch_size
