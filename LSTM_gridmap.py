@@ -73,41 +73,31 @@ class LSTM_masking(object):
         print('test data is loaded completely')
         self.max_len = max(train_max_len, test_max_len)
 
-    def inv(self, x):
-        return tf.cast(5 * x[0] + x[1], tf.int32)
+    def inv(self, x, y):
+        return 5 * x + y
 
     def make_mask(self, x):
-        x = tf.transpose(x, [1, 0, 2], name='input_transpose')  # (max_len, batch_size, state_dim)로 transpose
-        x = tf.reshape(x, [-1, 2],name='input_reshape') # [batch_size * state_dim]*sequence length로 reshape
-        x = tf.split(axis=0, num_or_size_splits=self.max_len-1, value=x, name='input_split') # time step별로 (batch_size, state_dim)인 tensor로 쪼갬
-        mask_seq = []
-        st=0
+        x = np.transpose(x, [1, 0, 2])
+        mask_seq=[]
         for step in x:  # step : batch * input_dim
-            st+=1
-            zero = tf.constant(0, dtype=tf.float32, name='0')
-            four = tf.constant(4, dtype=tf.float32, name='4')
             mask_batch = []
-            for data in range(step.shape[0]):  # data : input_dim
-                print('\rstep:%d, data:%d/%d'%(st,data+1,self.batch_size),end="")
-                self.north = tf.cond(tf.logical_and(tf.greater_equal((step[data][0]-1),zero), tf.less_equal((step[data][0]-1),four)), lambda: self.inv([step[data][0]-1,step[data][1]]), None)
-                west = self.inv([step[data][0],step[data][1]-1]) if ((tf.greater_equal((step[data][1]-1),zero) is not False) and (tf.less_equal((step[data][1]-1),four) is not False)) else None
-                east = self.inv([step[data][0],step[data][1]+1]) if ((tf.greater_equal((step[data][1]+1),zero) is not False) and (tf.less_equal((step[data][1]+1),four) is not False)) else None
-                south = self.inv([step[data][0]+1,step[data][1]]) if ((tf.greater_equal((step[data][0]+1),zero) is not False) and (tf.less_equal((step[data][0]+1),four) is not False)) else None
-                news = [self.north, east, west, south]
-                ind_list = []
+            for data in step:  # data : input_dim
+                north = self.inv(data[0]-1, data[1]) if data[0]-1 >= 0 and data[0]-1 <= 4 else None
+                east = self.inv(data[0], data[1]+1) if data[1]+1 >= 0 and data[1]+1 <= 4 else None
+                west = self.inv(data[0], data[1]-1) if data[1]-1 >= 0 and data[1]-1 <= 4 else None
+                south = self.inv(data[0]+1, data[1]) if data[0]+1 >= 0 and data[0]+1 <= 4 else None
+                news = [north, east, west, south]
+                idx=[]
                 for i in range(4):
                     if news[i] != None:
-                        ind_list.append([news[i]])
-                updates = tf.constant([0] * len(ind_list))
-                shape = tf.constant([25,])
-                with tf.name_scope("mask_matrix") as scope:
-                    mask_data = tf.scatter_nd(ind_list, updates, shape)
+                        idx.append(news[i])
+                pre_mask_data = tf.one_hot(idx,depth=25)
+                mask_data = tf.reduce_sum(pre_mask_data, 0)
                 mask_batch.append(mask_data)
             mask_seq.append(mask_batch)
-        output = tf.transpose(mask_seq, [1, 0, 2])
-        return tf.cast(output, tf.float32)
+        return tf.transpose(mask_seq, [1, 0, 2])
 
-    def build_model(self, x, seq_len):
+    def build_model(self):
         """
         param x: (batch_size, max_len, state_dim)
         param seq_len: a placeholder which is holding lengths of sequences in a batch
@@ -120,7 +110,7 @@ class LSTM_masking(object):
         lstm_cell = tf.contrib.rnn.BasicLSTMCell(self.num_hidden)
 
         # sequence length를 담은 vector를 static_rnn에 제공하여 길이가 다른 sequence에 대해 dynamic calculation이 가능하도록 함.
-        outputs, states = tf.nn.dynamic_rnn(lstm_cell, x, dtype=tf.float32, sequence_length=seq_len)
+        outputs, states = tf.nn.dynamic_rnn(lstm_cell, self.x, dtype=tf.float32, sequence_length=self.seq_len)
         #outputs, states = tf.contrib.rnn.static_rnn(lstm_cell, x, dtype=tf.float32, sequence_length=seq_len)
         #outputs = tf.stack(outputs) # split 해서 넣어서 나온 output을 하나의 list 내에 합쳐줌 (n_step, batch_size, state_dim)
         outputs = tf.transpose(outputs, [1, 0, 2]) # [batch_size, n_step, state_dim] 으로 transpose
@@ -133,21 +123,18 @@ class LSTM_masking(object):
         outputs = tf.split(axis=0, num_or_size_splits=self.max_len-1, value=outputs, name='output_split')
         logits = [tf.matmul(tf.squeeze(output), weight) + bias for output in outputs]
         logits = tf.transpose(tf.squeeze(logits), [1, 0, 2])
-        # masking
-        print('making mask..')
-        self.mask = self.make_mask(x)
-        print('\nmask is maded!')
         pred = tf.multiply(logits, self.mask)
         #pred = tf.nn.softmax(z, dim=-1)
         return pred
 
     def create_model(self):
         # placeholder
-        self.seq_len = tf.placeholder(tf.int32, [self.batch_size], name='batch_seqlen')  # batch 내의 각 sequence의 길이
         self.x = tf.placeholder(tf.float32, [self.batch_size, self.max_len-1, 2], name='input') # batch, seq_len, input_dim
         self.y = tf.placeholder(tf.float32, [self.batch_size, self.max_len-1, self.num_class], name='target')
+        self.seq_len = tf.placeholder(tf.int32, [self.batch_size], name='seqlen')  # batch 내의 각 sequence의 길이
+        self.mask = tf.placeholder(tf.float32, [self.batch_size, self.max_len-1, self.num_class], name='mask')
         print('building LSTM model..')
-        pred = self.build_model(self.x, self.seq_len)
+        pred = self.build_model()
         print('building LSTM model complete!')
         with tf.variable_scope('cost'):
             self.train_loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=pred, labels=self.y), name='train_loss')
@@ -168,8 +155,7 @@ class LSTM_masking(object):
         var_init = tf.initialize_all_variables()
         config = tf.ConfigProto()
         config.gpu_options.allow_growth = True
-        with tf.device('/gpu:0'):
-            sess = tf.Session(config=config)
+        sess = tf.Session(config=config)
         writer = tf.summary.FileWriter("C:/tmp/LSTM", sess.graph)
         sess.run(var_init)
 
@@ -182,14 +168,15 @@ class LSTM_masking(object):
                 end_ind = (step + 1) * self.batch_size
                 # train
                 train_feed = {self.x: self.x_train[start_ind:end_ind], self.y: self.y_train[start_ind:end_ind], self.seq_len: self.train_seq_len[start_ind:end_ind]}
-                self.mask.eval(self.north,session=sess)[0]
-                train_acc_summary, train_loss_summary, _ = sess.run([self.train_acc_summary, self.train_loss_summary, self.optimizer], feed_dict=train_feed)
+                train_masks = self.make_mask(train_feed[self.x]).eval(session=sess)
+                train_acc_summary, train_loss_summary, _ = sess.run([self.train_acc_summary, self.train_loss_summary, self.optimizer], feed_dict=train_feed.update({self.mask: train_masks}))
                 writer.add_summary(train_loss_summary, (epoch * total_batch + step))
                 writer.add_summary(train_acc_summary, (epoch * total_batch + step))
                 if step % self.log_every == 0:
                     # test
-                    test_feed = {self.x: self.x_test[start_ind:end_ind], self.y: self.y_test[start_ind:end_ind], self.seq_len:self.test_seq_len[start_ind:end_ind]}
-                    test_acc_summary, test_loss_summary = sess.run([self.test_acc_summary, self.test_loss_summary], feed_dict=test_feed)
+                    test_feed = {self.x: self.x_test[start_ind:end_ind], self.y: self.y_test[start_ind:end_ind], self.seq_len: self.test_seq_len[start_ind:end_ind]}
+                    test_masks = self.make_mask(test_feed[self.x])
+                    test_acc_summary, test_loss_summary = sess.run([self.test_acc_summary, self.test_loss_summary], feed_dict=test_feed.update({self.mask:test_masks}))
                     writer.add_summary(test_acc_summary, (epoch * total_batch + step))
                     writer.add_summary(test_loss_summary, (epoch * total_batch + step))
                     print('\repoch : %d, batch : %d/%d, train_acc : %2f, train_loss : %4f, test_acc : %2f, test_loss : %4f'
