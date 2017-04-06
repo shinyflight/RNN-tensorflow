@@ -69,7 +69,7 @@ class LSTM_masking(object):
         self.x_train, self.y_train, self.train_seq_len, train_max_len = self.load_data(self.train_path)
         print('training data is loaded completely')
         print('loading test data...')
-        self.x_test, self.y_train, self.train_seq_len, test_max_len = self.load_data(self.test_path)
+        self.x_test, self.y_test, self.test_seq_len, test_max_len = self.load_data(self.test_path)
         print('test data is loaded completely')
         self.max_len = max(train_max_len, test_max_len)
 
@@ -116,9 +116,8 @@ class LSTM_masking(object):
         outputs = tf.transpose(outputs, [1, 0, 2]) # [batch_size, n_step, state_dim] 으로 transpose
 
         # weights
-        with tf.variable_scope('weights'):
-            weight = tf.get_variable('w', [self.num_hidden, self.num_class], initializer=tf.random_normal_initializer(stddev=1.0))
-            bias = tf.get_variable('b', [self.num_class], initializer=tf.constant_initializer(0.0))
+        weight = tf.get_variable('w', [self.num_hidden, self.num_class], initializer=tf.random_normal_initializer(stddev=1.0))
+        bias = tf.get_variable('b', [self.num_class], initializer=tf.constant_initializer(0.0))
 
         outputs = tf.split(axis=0, num_or_size_splits=self.max_len-1, value=outputs, name='output_split')
         logits = [tf.matmul(tf.squeeze(output), weight) + bias for output in outputs]
@@ -155,36 +154,36 @@ class LSTM_masking(object):
         var_init = tf.initialize_all_variables()
         config = tf.ConfigProto()
         config.gpu_options.allow_growth = True
-        sess = tf.Session(config=config)
-        writer = tf.summary.FileWriter("C:/tmp/LSTM", sess.graph)
-        sess.run(var_init)
+        with tf.Session() as sess:
+            writer = tf.summary.FileWriter("C:/tmp/LSTM", sess.graph)
+            sess.run(var_init)
 
-        total_batch = int(len(self.x_train) // self.batch_size)
-        print("Training started...")
-        for epoch in range(self.epochs):
-            # np.random.shuffle(self.x_train)
-            for step in range(total_batch):
-                start_ind = step * self.batch_size
-                end_ind = (step + 1) * self.batch_size
-                # train
-                train_feed = {self.x: self.x_train[start_ind:end_ind], self.y: self.y_train[start_ind:end_ind], self.seq_len: self.train_seq_len[start_ind:end_ind]}
-                train_masks = self.make_mask(train_feed[self.x]).eval(session=sess)
-                train_acc_summary, train_loss_summary, _ = sess.run([self.train_acc_summary, self.train_loss_summary, self.optimizer], feed_dict=train_feed.update({self.mask: train_masks}))
-                writer.add_summary(train_loss_summary, (epoch * total_batch + step))
-                writer.add_summary(train_acc_summary, (epoch * total_batch + step))
-                if step % self.log_every == 0:
-                    # test
-                    test_feed = {self.x: self.x_test[start_ind:end_ind], self.y: self.y_test[start_ind:end_ind], self.seq_len: self.test_seq_len[start_ind:end_ind]}
-                    test_masks = self.make_mask(test_feed[self.x])
-                    test_acc_summary, test_loss_summary = sess.run([self.test_acc_summary, self.test_loss_summary], feed_dict=test_feed.update({self.mask:test_masks}))
-                    writer.add_summary(test_acc_summary, (epoch * total_batch + step))
-                    writer.add_summary(test_loss_summary, (epoch * total_batch + step))
-                    print('\repoch : %d, batch : %d/%d, train_acc : %2f, train_loss : %4f, test_acc : %2f, test_loss : %4f'
-                          %((epoch+1), (step+1)*self.batch_size, self.x_train.shape[0],
-                            self.train_acc.eval(train_feed), self.train_loss.eval(train_feed), self.test_acc.eval(test_feed), self.test_loss.eval(test_feed)))
-        print("Optimization Finished!")
-        tf.summary.FileWriter.close(writer)
+            total_batch = int(len(self.x_train) // self.batch_size)
+            print("Training started...")
+            for epoch in range(self.epochs):
+                # np.random.shuffle(self.x_train)
+                for step in range(total_batch):
+                    start_ind = step * self.batch_size
+                    end_ind = (step + 1) * self.batch_size
+                    # train
+                    train_masks = self.make_mask(self.x_train[start_ind:end_ind]).eval()
+                    train_feed = {self.x: self.x_train[start_ind:end_ind], self.y: self.y_train[start_ind:end_ind], self.seq_len: self.train_seq_len[start_ind:end_ind], self.mask: train_masks}
+                    train_acc_summary, train_loss_summary, _ = sess.run([self.train_acc_summary, self.train_loss_summary, self.optimizer], feed_dict=train_feed)
+                    writer.add_summary(train_loss_summary, (epoch * total_batch + step))
+                    writer.add_summary(train_acc_summary, (epoch * total_batch + step))
+                    if step % self.log_every == 0:
+                        # test
+                        test_masks = self.make_mask(self.x_test[start_ind:end_ind]).eval()
+                        test_feed = {self.x: self.x_test[start_ind:end_ind], self.y: self.y_test[start_ind:end_ind], self.seq_len: self.test_seq_len[start_ind:end_ind], self.mask: test_masks}
+                        test_acc_summary, test_loss_summary = sess.run([self.test_acc_summary, self.test_loss_summary], feed_dict=test_feed)
+                        writer.add_summary(test_acc_summary, (epoch * total_batch + step))
+                        writer.add_summary(test_loss_summary, (epoch * total_batch + step))
+                        print('\repoch : %d, batch : %d/%d, train_acc : %2f, train_loss : %4f, test_acc : %2f, test_loss : %4f'
+                              %((epoch+1), (step+1)*self.batch_size, self.x_train.shape[0],
+                                self.train_acc.eval(train_feed), self.train_loss.eval(train_feed), self.test_acc.eval(test_feed), self.test_loss.eval(test_feed)))
+            print("Optimization Finished!")
+            tf.summary.FileWriter.close(writer)
 
 if __name__ =='__main__':
-    model = LSTM_masking('d:/Projects/data/grid_map_data/train.txt', 'd:/Projects/data/grid_map_data/test.txt', 25, 10, 12, 3, 1, 0.001) #  train_path, test_path, num_class, log_every, num_hidden, batch_size, epochs, learning_rate
+    model = LSTM_masking('d:/Projects/data/grid_map_data/train_3.txt', 'd:/Projects/data/grid_map_data/test_3.txt', 25, 10, 12, 10, 1, 0.001) #  train_path, test_path, num_class, log_every, num_hidden, batch_size, epochs, learning_rate
     model.train_model()
