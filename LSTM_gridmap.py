@@ -77,6 +77,9 @@ class LSTM_masking(object):
         return tf.cast(5 * x[0] + x[1], tf.int32)
 
     def make_mask(self, x):
+        x = tf.transpose(x, [1, 0, 2], name='input_transpose')  # (max_len, batch_size, state_dim)로 transpose
+        x = tf.reshape(x, [-1, 2],name='input_reshape') # [batch_size * state_dim]*sequence length로 reshape
+        x = tf.split(axis=0, num_or_size_splits=self.max_len-1, value=x, name='input_split') # time step별로 (batch_size, state_dim)인 tensor로 쪼갬
         mask_seq = []
         st=0
         for step in x:  # step : batch * input_dim
@@ -86,17 +89,17 @@ class LSTM_masking(object):
             mask_batch = []
             for data in range(step.shape[0]):  # data : input_dim
                 print('\rstep:%d, data:%d/%d'%(st,data+1,self.batch_size),end="")
-                north = self.inv([step[data][0]-1,step[data][1]]) if ((tf.greater_equal((step[data][0]-1),zero) is not False) and (tf.less_equal((step[data][0]-1),four) is not False)) else None
+                self.north = tf.cond(tf.logical_and(tf.greater_equal((step[data][0]-1),zero), tf.less_equal((step[data][0]-1),four)), lambda: self.inv([step[data][0]-1,step[data][1]]), None)
                 west = self.inv([step[data][0],step[data][1]-1]) if ((tf.greater_equal((step[data][1]-1),zero) is not False) and (tf.less_equal((step[data][1]-1),four) is not False)) else None
                 east = self.inv([step[data][0],step[data][1]+1]) if ((tf.greater_equal((step[data][1]+1),zero) is not False) and (tf.less_equal((step[data][1]+1),four) is not False)) else None
                 south = self.inv([step[data][0]+1,step[data][1]]) if ((tf.greater_equal((step[data][0]+1),zero) is not False) and (tf.less_equal((step[data][0]+1),four) is not False)) else None
-                news = [north, east, west, south]
+                news = [self.north, east, west, south]
                 ind_list = []
                 for i in range(4):
                     if news[i] != None:
                         ind_list.append([news[i]])
                 updates = tf.constant([0] * len(ind_list))
-                shape = tf.constant([25, ])
+                shape = tf.constant([25,])
                 with tf.name_scope("mask_matrix") as scope:
                     mask_data = tf.scatter_nd(ind_list, updates, shape)
                 mask_batch.append(mask_data)
@@ -112,17 +115,14 @@ class LSTM_masking(object):
         param biases: (batch_size, num_class)
         return:
         """
-        x = tf.transpose(x, [1, 0, 2],name='input_transpose') # (max_len, batch_size, state_dim)로 transpose
-        x = tf.reshape(x, [-1, 2],name='input_reshape') # [batch_size * state_dim]*sequence length로 reshape
-        x = tf.split(axis=0, num_or_size_splits=self.max_len-1, value=x, name='input_split') # time step별로 (batch_size, state_dim)인 tensor로 쪼갬
 
         # Define a lstm cell with tensorflow
         lstm_cell = tf.contrib.rnn.BasicLSTMCell(self.num_hidden)
 
         # sequence length를 담은 vector를 static_rnn에 제공하여 길이가 다른 sequence에 대해 dynamic calculation이 가능하도록 함.
-        outputs, states = tf.nn.dyna(lstm_cell, x, dtype=tf.float32, sequence_length=seq_len)
+        outputs, states = tf.nn.dynamic_rnn(lstm_cell, x, dtype=tf.float32, sequence_length=seq_len)
         #outputs, states = tf.contrib.rnn.static_rnn(lstm_cell, x, dtype=tf.float32, sequence_length=seq_len)
-        outputs = tf.stack(outputs) # split 해서 넣어서 나온 output을 하나의 list 내에 합쳐줌 (n_step, batch_size, state_dim)
+        #outputs = tf.stack(outputs) # split 해서 넣어서 나온 output을 하나의 list 내에 합쳐줌 (n_step, batch_size, state_dim)
         outputs = tf.transpose(outputs, [1, 0, 2]) # [batch_size, n_step, state_dim] 으로 transpose
 
         # weights
@@ -130,14 +130,14 @@ class LSTM_masking(object):
             weight = tf.get_variable('w', [self.num_hidden, self.num_class], initializer=tf.random_normal_initializer(stddev=1.0))
             bias = tf.get_variable('b', [self.num_class], initializer=tf.constant_initializer(0.0))
 
-        outputs = tf.split(axis=0, num_or_size_splits=self.batch_size, value=outputs, name='output_split')
+        outputs = tf.split(axis=0, num_or_size_splits=self.max_len-1, value=outputs, name='output_split')
         logits = [tf.matmul(tf.squeeze(output), weight) + bias for output in outputs]
-        logits = tf.squeeze(logits)
+        logits = tf.transpose(tf.squeeze(logits), [1, 0, 2])
         # masking
         print('making mask..')
-        mask = self.make_mask(x)
+        self.mask = self.make_mask(x)
         print('\nmask is maded!')
-        pred = tf.multiply(logits, mask)
+        pred = tf.multiply(logits, self.mask)
         #pred = tf.nn.softmax(z, dim=-1)
         return pred
 
@@ -182,6 +182,7 @@ class LSTM_masking(object):
                 end_ind = (step + 1) * self.batch_size
                 # train
                 train_feed = {self.x: self.x_train[start_ind:end_ind], self.y: self.y_train[start_ind:end_ind], self.seq_len: self.train_seq_len[start_ind:end_ind]}
+                self.mask.eval(self.north,session=sess)[0]
                 train_acc_summary, train_loss_summary, _ = sess.run([self.train_acc_summary, self.train_loss_summary, self.optimizer], feed_dict=train_feed)
                 writer.add_summary(train_loss_summary, (epoch * total_batch + step))
                 writer.add_summary(train_acc_summary, (epoch * total_batch + step))
