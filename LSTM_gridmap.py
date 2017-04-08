@@ -154,7 +154,8 @@ class LSTM_masking(object):
         var_init = tf.initialize_all_variables()
         config = tf.ConfigProto()
         config.gpu_options.allow_growth = True
-        with tf.Session() as sess:
+        gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.5)
+        with tf.Session(config=tf.ConfigProto(gpu_options=gpu_options)) as sess:
             writer = tf.summary.FileWriter("C:/tmp/LSTM", sess.graph)
             sess.run(var_init)
 
@@ -178,12 +179,12 @@ class LSTM_masking(object):
                         test_acc_summary, test_loss_summary = sess.run([self.test_acc_summary, self.test_loss_summary], feed_dict=test_feed)
                         writer.add_summary(test_acc_summary, (epoch * total_batch + step))
                         writer.add_summary(test_loss_summary, (epoch * total_batch + step))
-                        print('\repoch : %d, batch : %d/%d, train_acc : %2f, train_loss : %4f, test_acc : %2f, test_loss : %4f'
+                        print('\repoch : %d, batch : %d/%d data, train_acc : %2f, train_loss : %4f, test_acc : %2f, test_loss : %4f'
                               %((epoch+1), (step+1)*self.batch_size, self.x_train.shape[0],
                                 self.train_acc.eval(train_feed), self.train_loss.eval(train_feed), self.test_acc.eval(test_feed), self.test_loss.eval(test_feed)))
             print("Optimization Finished!")
             tf.summary.FileWriter.close(writer)
 
 if __name__ =='__main__':
-    model = LSTM_masking('d:/Projects/data/grid_map_data/train_3.txt', 'd:/Projects/data/grid_map_data/test_3.txt', 25, 10, 12, 10, 1, 0.001) #  train_path, test_path, num_class, log_every, num_hidden, batch_size, epochs, learning_rate
+    model = LSTM_masking('d:/Projects/data/grid_map_data/train_3.txt', 'd:/Projects/data/grid_map_data/test_3.txt', 25, 10, 12, 5, 1, 0.01) #  train_path, test_path, num_class, log_every, num_hidden, batch_size, epochs, learning_rate
     model.train_model()
