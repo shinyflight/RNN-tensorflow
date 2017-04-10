@@ -3,9 +3,10 @@ import tensorflow as tf
 from keras.utils import to_categorical
 import matplotlib.pyplot as plt
 import os
+import time
 
-os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
-os.environ["CUDA_VISIBLE_DEVICES"]="0"
+#os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
+#os.environ["CUDA_VISIBLE_DEVICES"]="0"
 
 class LSTM_masking(object):
     def __init__(self, train_path, test_path, num_class, log_every, num_hidden, batch_size, epochs, learning_rate):
@@ -65,12 +66,12 @@ class LSTM_masking(object):
         return np.asarray(x), np.asarray(y), seq_len, max_len
 
     def data_load(self):
-        print('loading training data...')
+        print('loading training data...',end='')
         self.x_train, self.y_train, self.train_seq_len, train_max_len = self.load_data(self.train_path)
-        print('training data is loaded completely')
-        print('loading test data...')
+        print('\rtraining data is loaded completely')
+        print('loading test data...',end='')
         self.x_test, self.y_test, self.test_seq_len, test_max_len = self.load_data(self.test_path)
-        print('test data is loaded completely')
+        print('\rtest data is loaded completely')
         self.max_len = max(train_max_len, test_max_len)
 
     def inv(self, x, y):
@@ -91,7 +92,9 @@ class LSTM_masking(object):
                 for i in range(4):
                     if news[i] != None:
                         idx.append(news[i])
-                pre_mask_data = tf.one_hot(idx,depth=25)
+                with tf.variable_scope('one_hot', reuse=True):
+                    with tf.device('/gpu:0'):
+                        pre_mask_data = tf.one_hot(idx, depth=25)
                 mask_data = tf.reduce_sum(pre_mask_data, 0)
                 mask_batch.append(mask_data)
             mask_seq.append(mask_batch)
@@ -154,34 +157,41 @@ class LSTM_masking(object):
         var_init = tf.initialize_all_variables()
         config = tf.ConfigProto()
         config.gpu_options.allow_growth = True
-        gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.5)
-        with tf.Session(config=tf.ConfigProto(gpu_options=gpu_options)) as sess:
+        #config.gpu_options.per_process_gpu_memory_fraction = 0.3
+        #config.log_device_placement = True
+        config.allow_soft_placement = True
+        g = tf.Graph()
+        with tf.InteractiveSession(config=config, graph=g) as sess:
             writer = tf.summary.FileWriter("C:/tmp/LSTM", sess.graph)
             sess.run(var_init)
 
             total_batch = int(len(self.x_train) // self.batch_size)
             print("Training started...")
+            start_time = time.time()
             for epoch in range(self.epochs):
                 # np.random.shuffle(self.x_train)
                 for step in range(total_batch):
+                    #run_options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
                     start_ind = step * self.batch_size
                     end_ind = (step + 1) * self.batch_size
                     # train
                     train_masks = self.make_mask(self.x_train[start_ind:end_ind]).eval()
                     train_feed = {self.x: self.x_train[start_ind:end_ind], self.y: self.y_train[start_ind:end_ind], self.seq_len: self.train_seq_len[start_ind:end_ind], self.mask: train_masks}
                     train_acc_summary, train_loss_summary, _ = sess.run([self.train_acc_summary, self.train_loss_summary, self.optimizer], feed_dict=train_feed)
-                    writer.add_summary(train_loss_summary, (epoch * total_batch + step))
-                    writer.add_summary(train_acc_summary, (epoch * total_batch + step))
+
                     if step % self.log_every == 0:
+                        writer.add_summary(train_loss_summary, (epoch * total_batch + step))
+                        writer.add_summary(train_acc_summary, (epoch * total_batch + step))
                         # test
                         test_masks = self.make_mask(self.x_test[start_ind:end_ind]).eval()
                         test_feed = {self.x: self.x_test[start_ind:end_ind], self.y: self.y_test[start_ind:end_ind], self.seq_len: self.test_seq_len[start_ind:end_ind], self.mask: test_masks}
                         test_acc_summary, test_loss_summary = sess.run([self.test_acc_summary, self.test_loss_summary], feed_dict=test_feed)
                         writer.add_summary(test_acc_summary, (epoch * total_batch + step))
                         writer.add_summary(test_loss_summary, (epoch * total_batch + step))
-                        print('\repoch : %d, batch : %d/%d data, train_acc : %2f, train_loss : %4f, test_acc : %2f, test_loss : %4f'
-                              %((epoch+1), (step+1)*self.batch_size, self.x_train.shape[0],
+                        print('\repoch : %d, batch : %d/%d data, eta : %.2fsec, train_acc : %2f, train_loss : %4f, test_acc : %2f, test_loss : %4f'
+                              %((epoch+1), (step+1)*self.batch_size, self.x_train.shape[0], (time.time() - start_time),
                                 self.train_acc.eval(train_feed), self.train_loss.eval(train_feed), self.test_acc.eval(test_feed), self.test_loss.eval(test_feed)))
+                        start_time = time.time()
             print("Optimization Finished!")
             tf.summary.FileWriter.close(writer)
 
