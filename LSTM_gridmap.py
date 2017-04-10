@@ -1,9 +1,14 @@
 import numpy as np
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 import tensorflow as tf
 from keras.utils import to_categorical
 import matplotlib.pyplot as plt
 import os
 import time
+
+#print('verbosity:',tf.logging.get_verbosity())
+#tf.logging.set_verbosity(tf.logging.FATAL)
 
 #os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
 #os.environ["CUDA_VISIBLE_DEVICES"]="0"
@@ -74,9 +79,6 @@ class LSTM_masking(object):
         print('\rtest data is loaded completely')
         self.max_len = max(train_max_len, test_max_len)
 
-    def inv(self, x, y):
-        return 5 * x + y
-
 
     def build_model(self):
         """
@@ -108,31 +110,23 @@ class LSTM_masking(object):
         return pred
 
     def create_model(self):
-        config = tf.ConfigProto()
-        config.gpu_options.allow_growth = True
-        # config.gpu_options.per_process_gpu_memory_fraction = 0.3
-        config.log_device_placement = True
-        config.allow_soft_placement = True
-        self.g = tf.Graph()
-        self.sess = tf.InteractiveSession(config=config, graph=self.g)
-
         # placeholder
         self.x = tf.placeholder(tf.float32, [self.batch_size, self.max_len-1, 2], name='input') # batch, seq_len, input_dim
         self.y = tf.placeholder(tf.float32, [self.batch_size, self.max_len-1, self.num_class], name='target')
         self.seq_len = tf.placeholder(tf.int32, [self.batch_size], name='seqlen')  # batch 내의 각 sequence의 길이
         self.mask = tf.placeholder(tf.float32, [self.batch_size, self.max_len-1, self.num_class], name='mask')
         print('building LSTM model..')
-        pred = self.build_model()
+        self.pred = self.build_model()
         print('building LSTM model complete!')
         with tf.variable_scope('cost'):
-            self.train_loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=pred, labels=self.y), name='train_loss')
-            self.test_loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=pred, labels=self.y), name='test_loss')
+            self.train_loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=self.pred, labels=self.y), name='train_loss')
+            self.test_loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=self.pred, labels=self.y), name='test_loss')
             self.train_loss_summary = tf.summary.scalar('train_loss', self.train_loss)
             self.test_loss_summary = tf.summary.scalar('test_loss', self.test_loss)
         self.optimizer = tf.train.AdamOptimizer(self.learning_rate).minimize(self.train_loss)
 
         with tf.variable_scope('accuracy'):
-            correct_pred = tf.equal(tf.argmax(pred, 1), tf.argmax(self.y, 1))
+            correct_pred = tf.equal(tf.argmax(self.pred, 1), tf.argmax(self.y, 1))
             self.train_acc = tf.reduce_mean(tf.cast(correct_pred, tf.float32), name='train_acc')
             self.test_acc = tf.reduce_mean(tf.cast(correct_pred, tf.float32), name='test_acc')
             self.train_acc_summary = tf.summary.scalar('train_acc', self.train_acc)
@@ -140,66 +134,82 @@ class LSTM_masking(object):
 
 
     def train_model(self):
-        var_init = tf.initialize_all_variables()
-        # with tf.Session(config=config) as sess:
-        sess = self.sess
-        sess.run(var_init)
-        writer = tf.summary.FileWriter("C:/tmp/LSTM", sess.graph)
+        var_init = tf.global_variables_initializer()
+        self.config = tf.ConfigProto()
+        self.config.gpu_options.allow_growth = True
+        # config.gpu_options.per_process_gpu_memory_fraction = 0.3
+        self.config.log_device_placement = False
+        self.config.allow_soft_placement = True
 
-        total_batch = int(len(self.x_train) // self.batch_size)
-        print("Training started...")
-        start_time = time.time()
-        for epoch in range(self.epochs):
-            # np.random.shuffle(self.x_train)
-            for step in range(total_batch):
-                #run_options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
-                start_ind = step * self.batch_size
-                end_ind = (step + 1) * self.batch_size
-                # train
-                train_masks = self.make_mask(self.x_train[start_ind:end_ind]).eval()
-                train_feed = {self.x: self.x_train[start_ind:end_ind], self.y: self.y_train[start_ind:end_ind], self.seq_len: self.train_seq_len[start_ind:end_ind], self.mask: train_masks}
-                train_acc_summary, train_loss_summary, _ = sess.run([self.train_acc_summary, self.train_loss_summary, self.optimizer], feed_dict=train_feed)
+        with tf.Session(config=self.config) as sess:
+            sess.run(var_init)
+            writer = tf.summary.FileWriter("C:/tmp/LSTM", sess.graph)
 
-                if step % self.log_every == 0:
-                    writer.add_summary(train_loss_summary, (epoch * total_batch + step))
-                    writer.add_summary(train_acc_summary, (epoch * total_batch + step))
-                    # test
-                    test_masks = self.make_mask(self.x_test[start_ind:end_ind]).eval()
-                    test_feed = {self.x: self.x_test[start_ind:end_ind], self.y: self.y_test[start_ind:end_ind], self.seq_len: self.test_seq_len[start_ind:end_ind], self.mask: test_masks}
-                    test_acc_summary, test_loss_summary = sess.run([self.test_acc_summary, self.test_loss_summary], feed_dict=test_feed)
-                    writer.add_summary(test_acc_summary, (epoch * total_batch + step))
-                    writer.add_summary(test_loss_summary, (epoch * total_batch + step))
-                    print('\repoch : %d, batch : %d/%d data, eta : %.2fsec, train_acc : %2f, train_loss : %4f, test_acc : %2f, test_loss : %4f'
-                          %((epoch+1), (step+1)*self.batch_size, self.x_train.shape[0], (time.time() - start_time),
-                            self.train_acc.eval(train_feed), self.train_loss.eval(train_feed), self.test_acc.eval(test_feed), self.test_loss.eval(test_feed)))
-                    start_time = time.time()
-        print("Optimization Finished!")
-        tf.summary.FileWriter.close(writer)
+            total_batch = int(len(self.x_train) // self.batch_size)
+            print("Training started...")
+            start_time = time.time()
+            for epoch in range(self.epochs):
+                # np.random.shuffle(self.x_train)
+                for step in range(total_batch):
+                    #run_options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
+                    #run_metadata = tf.RunMetadata()
+                    start_ind = step * self.batch_size
+                    end_ind = (step + 1) * self.batch_size
+                    # train
+                    #start_mask = time.time()
+                    train_masks = self.make_mask(self.x_train[start_ind:end_ind])
+                    #print(self.x_train[start_ind:end_ind]][0])
+                    #print(train_masks[0]) # check masks values
+                    #print('%.2fsec' % (time.time()-start_mask)) # check time to make masks
+                    train_feed = {self.x: self.x_train[start_ind:end_ind], self.y: self.y_train[start_ind:end_ind], self.seq_len: self.train_seq_len[start_ind:end_ind], self.mask: train_masks}
+                    train_acc_summary, train_loss_summary, _ = sess.run([self.train_acc_summary, self.train_loss_summary, self.optimizer], feed_dict=train_feed)#, run_metadata=run_metadata)
+                    #writer.add_run_metadata(run_metadata, 'step%d' % step)
+                    if step % self.log_every == 0:
+                        writer.add_summary(train_loss_summary, (epoch * total_batch + step))
+                        writer.add_summary(train_acc_summary, (epoch * total_batch + step))
+                        # test
+                        test_masks = self.make_mask(self.x_test[start_ind:end_ind])
+                        test_feed = {self.x: self.x_test[start_ind:end_ind], self.y: self.y_test[start_ind:end_ind], self.seq_len: self.test_seq_len[start_ind:end_ind], self.mask: test_masks}
+                        test_acc_summary, test_loss_summary = sess.run([self.test_acc_summary, self.test_loss_summary], feed_dict=test_feed)
+                        writer.add_summary(test_acc_summary, (epoch * total_batch + step))
+                        writer.add_summary(test_loss_summary, (epoch * total_batch + step))
+                        # print(tf.nn.softmax(self.pred).eval(train_feed)) # check output of the model
+                        print('\repoch : %d, batch : %d/%d data, eta : %.2fsec, train_acc : %2f, train_loss : %4f, test_acc : %2f, test_loss : %4f'
+                              %((epoch+1), (step+1)*self.batch_size, self.x_train.shape[0], (time.time() - start_time),
+                                self.train_acc.eval(train_feed), self.train_loss.eval(train_feed), self.test_acc.eval(test_feed), self.test_loss.eval(test_feed)))
+                        start_time = time.time()
+            print("Optimization Finished!")
+            tf.summary.FileWriter.close(writer)
+
+    def inv(self, x, y):
+        return 5 * x + y
 
     def make_mask(self, x):
-        with self.g.as_default():
-            x = np.transpose(x, [1, 0, 2])
-            mask_seq = []
-            for step in x:  # step : batch * input_dim
-                mask_batch = []
-                for data in step:  # data : input_dim
-                    north = self.inv(data[0] - 1, data[1]) if data[0] - 1 >= 0 and data[0] - 1 <= 4 else None
-                    east = self.inv(data[0], data[1] + 1) if data[1] + 1 >= 0 and data[1] + 1 <= 4 else None
-                    west = self.inv(data[0], data[1] - 1) if data[1] - 1 >= 0 and data[1] - 1 <= 4 else None
-                    south = self.inv(data[0] + 1, data[1]) if data[0] + 1 >= 0 and data[0] + 1 <= 4 else None
-                    news = [north, east, west, south]
-                    idx = []
-                    for i in range(4):
-                        if news[i] != None:
-                            idx.append(news[i])
-                    with tf.variable_scope('one_hot', reuse=True):
-                        with tf.device('/gpu:0'):
-                            pre_mask_data = tf.one_hot(idx, depth=25, name='onehot')
-                    mask_data = tf.reduce_sum(pre_mask_data, 0)
-                    mask_batch.append(mask_data)
-                mask_seq.append(mask_batch)
-        return tf.transpose(mask_seq, [1, 0, 2])
+        x = np.transpose(x, [1, 0, 2])
+        mask_seq = []
+        with tf.Graph().as_default():
+            ind = tf.placeholder(tf.uint8, None, name='onehot_idx')
+            pre_mask_data = tf.one_hot(ind, depth=25, name='onehot')
+            with tf.Session(config=self.config) as sess2:
+                for step in x:  # step : batch * input_dim
+                    mask_batch = []
+                    for data in step:  # data : input_dim
+                        north = self.inv(data[0] - 1, data[1]) if data[0] - 1 >= 0 and data[0] - 1 <= 4 else None
+                        east = self.inv(data[0], data[1] + 1) if data[1] + 1 >= 0 and data[1] + 1 <= 4 else None
+                        west = self.inv(data[0], data[1] - 1) if data[1] - 1 >= 0 and data[1] - 1 <= 4 else None
+                        south = self.inv(data[0] + 1, data[1]) if data[0] + 1 >= 0 and data[0] + 1 <= 4 else None
+                        news = [north, east, west, south]
+                        idx = []
+                        for i in range(4):
+                            if news[i] != None:
+                                idx.append(news[i])
+                        mask_data = sess2.run(pre_mask_data, feed_dict = {ind: idx})
+                        mask = np.sum(mask_data, axis=0)
+                        mask_batch.append(mask)
+                    mask_seq.append(mask_batch)
+        return np.transpose(mask_seq, [1, 0, 2])
+
 
 if __name__ =='__main__':
-    model = LSTM_masking('d:/Projects/data/grid_map_data/train_3.txt', 'd:/Projects/data/grid_map_data/test_3.txt', 25, 10, 12, 5, 1, 0.01) #  train_path, test_path, num_class, log_every, num_hidden, batch_size, epochs, learning_rate
+    model = LSTM_masking('d:/Projects/data/grid_map_data/train_3_test.txt', 'd:/Projects/data/grid_map_data/test_3_test.txt', 25, 10, 12, 5, 1, 0.01) #  train_path, test_path, num_class, log_every, num_hidden, batch_size, epochs, learning_rate
     model.train_model()
