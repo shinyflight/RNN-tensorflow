@@ -1,7 +1,7 @@
 import tensorflow as tf
 import numpy as np
 from keras.utils import to_categorical
-
+'''
 def load_data(path):
     """
     * input
@@ -101,3 +101,8 @@ with tf.Session() as sess:
     input = load_data('d:/Projects/data/grid_map_data/test_test.txt')
 
     print(sess.run(output,feed_dict={x:input}))
+'''
+sess= tf.Session()
+a = tf.one_hot([1,5,15],depth=25)
+b= tf.reduce_sum(a, 0)
+print(sess.run(b))
